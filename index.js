@@ -1,16 +1,16 @@
-// 酒馆输入框修复助手 v3.9
+// 酒馆输入框修复助手 v3.10
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.9 修复：
-//  1) 发送后自动聚焦加防误触发：切角色/重载聊天（批量重建消息）不再抢焦点弹键盘，
-//     只在「新增恰好 1 条用户消息且位于聊天末尾」时聚焦
-//  2) applyFix 状态条件补全：resize/overflowY 被主题清掉时也能补回
-//  3) 恢复默认回调清理重复刷新；style.css 注释版本号同步
+// v3.10 修复：
+//  1) 更新检查改三源兜底：GitHub API（无缓存最新）→ raw 带时间戳 → jsDelivr 镜像，
+//     修掉「推了新版本面板却显示已最新」的 CDN 缓存坑（验证时踩过两次）
+//  2) 自愈日志文案中文化，键盘正常归位不再误报「被顶掉」
+//  3) 清理发送聚焦改版后遗留的未使用函数
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.9';
-    var CURRENT_VERSION = '3.9.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.10';
+    var CURRENT_VERSION = '3.10.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -143,7 +143,7 @@
         var target = (s.pinKeyboard && kb > KB_MIN) ? kb + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
-            logStatus('检测到键盘钉住被顶掉，已自动修正');
+            logStatus('键盘状态变化，已自动修正');
         }
         if (!IS_TOUCH || !ta) return;
         var cs = window.getComputedStyle(ta);
@@ -172,12 +172,6 @@
 
     // 发送后自动聚焦（默认关）：只认新增的「用户消息」节点，AI 回复不触发
     var focusObserver = null;
-    function isUserMessageNode(n) {
-        if (!n || n.nodeType !== 1) return false;
-        if (n.classList && n.classList.contains('mes') && n.classList.contains('user')) return true;
-        if (n.querySelector && n.querySelector('.mes.user')) return true;
-        return false;
-    }
     // 该新增节点内的 .mes.user 是否就是聊天最后一条消息（排除切角色/重载的批量重建）
     function isAtChatEnd(n) {
         var mes = (n.classList && n.classList.contains('mes') && n.classList.contains('user'))
@@ -271,24 +265,47 @@
         el.textContent = msg;
         el.style.color = isUpdate ? '#cf222e' : '';
     }
+    // 三源兜底取最新 manifest：GitHub API（无缓存）→ raw 带时间戳 → jsDelivr 镜像
     function checkUpdate() {
         var el = document.getElementById('stif-update');
         if (!el) return;
         el.textContent = '检查更新中…';
         el.style.color = '';
-        fetch(UPDATE_URL, { cache: 'no-store' })
-            .then(function (r) { return r.json(); })
-            .then(function (m) {
-                var latest = String(m.version || '');
-                if (latest && cmpVersion(latest, CURRENT_VERSION) > 0) {
-                    setUpdateLine('发现新版本 v' + latest + '，点击更新', true);
-                } else {
-                    setUpdateLine('当前已是最新版本 v' + CURRENT_VERSION, false);
-                }
-            })
-            .catch(function () {
+        var sources = [
+            'https://api.github.com/repos/smyzbrm/st-input-fix/contents/manifest.json',
+            UPDATE_URL + '?t=' + Date.now(),
+            'https://cdn.jsdelivr.net/gh/smyzbrm/st-input-fix@main/manifest.json'
+        ];
+        function tryNext(i) {
+            if (i >= sources.length) {
                 setUpdateLine('检查失败（网络），点此重试', false);
-            });
+                return;
+            }
+            fetch(sources[i], { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('http ' + r.status);
+                    return r.text();
+                })
+                .then(function (txt) {
+                    var m = null;
+                    if (sources[i].indexOf('api.github.com') !== -1) {
+                        // GitHub API 返回 base64，先解码再解析
+                        var j = JSON.parse(txt);
+                        m = (j && j.content) ? JSON.parse(atob(j.content)) : null;
+                    } else {
+                        m = JSON.parse(txt);
+                    }
+                    if (!m || !m.version) throw new Error('bad manifest');
+                    var latest = String(m.version);
+                    if (cmpVersion(latest, CURRENT_VERSION) > 0) {
+                        setUpdateLine('发现新版本 v' + latest + '，点击更新', true);
+                    } else {
+                        setUpdateLine('当前已是最新版本 v' + CURRENT_VERSION, false);
+                    }
+                })
+                .catch(function () { tryNext(i + 1); });
+        }
+        tryNext(0);
     }
     function doUpdate() {
         var el = document.getElementById('stif-update');
