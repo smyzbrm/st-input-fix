@@ -1,15 +1,14 @@
-// 酒馆输入框修复助手 v3.15
+// 酒馆输入框修复助手 v3.16
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.15 修复（一键更新真根治）：
-//  对照官方源码：extensions.js 并不导出 updateExtension；酒馆更新机制本质是
-//  POST /api/extensions/update（body: {extensionName, global}，头用 script.js 导出的 getRequestHeaders）。
-//  更新改为直接调用该官方接口，模块阶梯降为兜底。
+// v3.16 修复：
+//  1) 更新防重入：双重点击不再并发两个 POST 更新请求
+//  2) 更新结果写进检测日志：成功/已最新/失败原因（HTTP 状态与错误信息）可见，方便排查
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.15';
-    var CURRENT_VERSION = '3.15.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.16';
+    var CURRENT_VERSION = '3.16.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -335,7 +334,7 @@
             .then(function (mod) {
                 var getHeaders = mod.getRequestHeaders || (mod.default && mod.default.getRequestHeaders);
                 if (typeof getHeaders !== 'function') {
-                    throw new Error('no getRequestHeaders');
+                    throw new Error('getRequestHeaders 未导出');
                 }
                 return fetch('/api/extensions/update', {
                     method: 'POST',
@@ -345,19 +344,24 @@
             })
             .then(function (resp) {
                 if (!resp.ok) {
-                    return resp.text().then(function (t) { throw new Error('http ' + resp.status + ' ' + t); });
+                    return resp.text().then(function (t) { throw new Error('HTTP ' + resp.status + ' ' + t); });
                 }
                 return resp.json();
             })
             .then(function (data) {
                 if (data && data.isUpToDate) {
                     setUpdateLine('已是最新版本 v' + CURRENT_VERSION, false);
+                    logStatus('一键更新：已是最新版本');
                 } else {
                     setUpdateLine('更新成功，重启酒馆后生效', false);
+                    logStatus('一键更新：成功，重启后生效');
                 }
                 return true;
             })
-            .catch(function () { return false; });
+            .catch(function (e) {
+                logStatus('更新接口失败：' + (e && e.message ? e.message : e));
+                return false;
+            });
     }
     // 兜底阶梯（个别版本可能走 Settings.updateExtension 导出）：extensions.js → settings.js → 绝对路径 → window
     function ladderUpdate() {
@@ -373,6 +377,7 @@
         }
         function attempt(i) {
             if (i >= sources.length) {
+                logStatus('备用通道均不可用，请手动下载新 zip 重装');
                 setUpdateLine('自动更新不可用，请手动下载新 zip 重装', false);
                 return;
             }
@@ -427,13 +432,19 @@
         }
         attempt(0);
     }
+    var updating = false; // 更新防重入：双重点击不会并发两个请求
     function doUpdate() {
         var el = document.getElementById('stif-update');
-        if (!el) return;
+        if (!el || updating) return;
+        updating = true;
         el.textContent = '正在更新，请稍候…';
         el.style.color = '';
         tryApiUpdate().then(function (ok) {
-            if (!ok) ladderUpdate();
+            if (!ok) {
+                logStatus('官方接口不可用，尝试备用通道');
+                ladderUpdate();
+            }
+            updating = false;
         });
     }
 
