@@ -1,16 +1,19 @@
-// 酒馆输入框修复助手 v3.5
+// 酒馆输入框修复助手 v3.6
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠）
-// v3.5 新增「收起快速归位」：键盘一开始收起就立即把输入栏放回底部，并静默 600ms
-//       不做任何核对计算，减轻键盘回弹瞬间的页面负担（默认开启，可在面板关闭）
-// v3.4：键盘识别阈值 80px / 发送聚焦只认用户消息 / 桌面端不锁高度 / 事件写入与定时器核对分离
+// v3.6 新增「更新检查」：面板加载时自动检测 GitHub 最新版本；
+//       发现新版本 → 显示「发现新版本 vX，点击更新」（点击走酒馆自带 Git 更新机制）；
+//       没有新版本 → 显示「当前已是最新版本」；每 30 分钟自动复查一次
+// v3.5：收起快速归位 / v3.4：键盘识别阈值、发送聚焦只认用户消息、桌面端不锁高度
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.5';
+    var VERSION = 'v3.6';
+    var CURRENT_VERSION = '3.6.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
+    var UPDATE_URL = 'https://raw.githubusercontent.com/smyzbrm/st-input-fix/main/manifest.json';
 
     var DEFAULTS = {
         enabled: true,
@@ -214,6 +217,67 @@
         if (el) el.textContent = '最近检测：' + msg;
     }
 
+    // ---- 更新检查 ----
+    // 比较版本号 a vs b，返回 a>b 为 1，a<b 为 -1，相等为 0
+    function cmpVersion(a, b) {
+        var pa = String(a).split('.').map(function (x) { return parseInt(x, 10) || 0; });
+        var pb = String(b).split('.').map(function (x) { return parseInt(x, 10) || 0; });
+        for (var i = 0; i < 3; i++) {
+            var va = pa[i] || 0, vb = pb[i] || 0;
+            if (va > vb) return 1;
+            if (va < vb) return -1;
+        }
+        return 0;
+    }
+    function setUpdateLine(msg, isUpdate) {
+        var el = document.getElementById('stif-update');
+        if (!el) return;
+        el.textContent = msg;
+        el.style.color = isUpdate ? '#cf222e' : '';
+    }
+    function checkUpdate() {
+        var el = document.getElementById('stif-update');
+        if (!el) return;
+        el.textContent = '检查更新中…';
+        el.style.color = '';
+        fetch(UPDATE_URL, { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (m) {
+                var latest = String(m.version || '');
+                if (latest && cmpVersion(latest, CURRENT_VERSION) > 0) {
+                    setUpdateLine('发现新版本 v' + latest + '，点击更新', true);
+                } else {
+                    setUpdateLine('当前已是最新版本 v' + CURRENT_VERSION, false);
+                }
+            })
+            .catch(function () {
+                setUpdateLine('检查失败（网络），点此重试', false);
+            });
+    }
+    function doUpdate() {
+        var el = document.getElementById('stif-update');
+        if (!el) return;
+        el.textContent = '正在更新，请稍候…';
+        el.style.color = '';
+        // 动态导入酒馆设置模块，走它自带的 Git 更新机制；失败则提示手动重装
+        import('../../../settings.js')
+            .then(function (mod) {
+                var S = mod.Settings || (mod.default && mod.default.Settings) || window.Settings;
+                if (S && typeof S.updateExtension === 'function') {
+                    S.updateExtension('st-input-fix');
+                    setUpdateLine('更新已触发，重启酒馆后生效', false);
+                } else if (S && typeof S.updateAllExtensions === 'function') {
+                    S.updateAllExtensions();
+                    setUpdateLine('更新已触发，重启酒馆后生效', false);
+                } else {
+                    setUpdateLine('自动更新不可用，请手动卸载重装', false);
+                }
+            })
+            .catch(function () {
+                setUpdateLine('自动更新不可用，请手动卸载重装', false);
+            });
+    }
+
     // ---- 扩展面板设置块 ----
     function buildUI() {
         var container = document.getElementById('extensions_settings');
@@ -231,6 +295,7 @@
             '<div id="stif-body" style="padding:0 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:14px;">' +
             '<div id="stif-summary" style="font-size:12px;opacity:0.75;"></div>' +
             '<div id="stif-statuslog" style="font-size:12px;opacity:0.75;background:var(--SmartThemeBodyBackground, #eef3f1);border-radius:4px;padding:4px 6px;">最近检测：等待中</div>' +
+            '<div id="stif-update" style="font-size:12px;cursor:pointer;padding:4px 6px;border:1px dashed var(--SmartThemeBorderColor, #cfe0da);border-radius:4px;text-align:center;">检查更新中…</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-enabled" style="width:16px;height:16px;"> 启用修复</label>' +
             '<div style="display:flex;align-items:center;gap:6px;">输入框高度 <button id="stif-dec" type="button" style="padding:2px 10px;">−</button> <input type="number" id="stif-height" min="24" max="120" step="1" style="width:62px;"> <button id="stif-inc" type="button" style="padding:2px 10px;">+</button> px</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-pin" style="width:16px;height:16px;"> 键盘弹起时钉住输入栏</label>' +
@@ -257,6 +322,7 @@
         var caret = document.getElementById('stif-caret');
         var dot = document.getElementById('stif-dot');
         var summary = document.getElementById('stif-summary');
+        var upd = document.getElementById('stif-update');
 
         function refreshUI() {
             cbEnable.checked = !!s.enabled;
@@ -327,6 +393,14 @@
             save();
             refreshUI();
         });
+        upd.addEventListener('click', function () {
+            var t = upd.textContent;
+            if (t.indexOf('点击更新') !== -1) {
+                doUpdate();
+            } else {
+                checkUpdate(); // 已最新/失败 → 重查
+            }
+        });
 
         cbEnable.addEventListener('change', function () {
             s.enabled = cbEnable.checked;
@@ -383,6 +457,8 @@
         });
 
         refreshUI();
+        checkUpdate(); // 面板就绪后立即查一次更新
+        setInterval(checkUpdate, 30 * 60 * 1000); // 每 30 分钟复查
     }
 
     try {
