@@ -1,14 +1,19 @@
-// 酒馆输入框修复助手 v3.3
-// 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 扩展面板设置块（可折叠）
-// v3.3 新增「自动检测与自愈」：检测键盘钉住是否被顶掉、输入框高度是否被改走、键盘弹收是否异常，
-//       发现即自动修复；键盘弹起期间轮询加速到 300ms 防复发，收起后回到 1s 省电；
-//       面板新增「立即自检」按钮与检测日志行，可随时查看它做了什么
+// 酒馆输入框修复助手 v3.4
+// 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠）
+// v3.4 优化：
+//  1) 键盘识别更准：阈值提到 80px，手机浏览器地址栏收起不再被误判成键盘
+//  2) 发送聚焦只认「用户消息」节点，AI 回复不再误弹键盘
+//  3) 桌面端自动不锁高度：非触屏设备保持酒馆原生输入框行为
+//  4) 职责分离：事件负责实时写入，定时器只做核对，写入更少更省
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.3';
+    var VERSION = 'v3.4';
     var KEY = 'st-input-fix-settings';
+    var IS_TOUCH = 'ontouchstart' in window;
+    var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
+
     var DEFAULTS = {
         enabled: true,
         height: 44,
@@ -37,6 +42,7 @@
     function applyFix() {
         var ta = document.getElementById('send_textarea');
         if (!ta) return;
+        if (!IS_TOUCH) return; // 桌面端不锁高度
         if (!s.enabled) {
             if (ta.style.height || ta.style.minHeight || ta.style.maxHeight || ta.style.resize || ta.style.overflowY) {
                 ta.style.height = '';
@@ -57,10 +63,13 @@
         }
     }
 
-    // ---- 键盘钉住 ----
-    var kbOpen = false;
-    var kbVerifyTimer = null;
+    function kbHeight() {
+        var vv = window.visualViewport;
+        if (!vv) return 0;
+        return window.innerHeight - vv.height - vv.offsetTop;
+    }
 
+    // 事件路径：键盘动画期间实时写入
     function pinSendForm() {
         var form = document.getElementById('send_form');
         if (!form) return;
@@ -69,23 +78,17 @@
             setKbOpen(false);
             return;
         }
-        var vv = window.visualViewport;
-        if (!vv) return;
-        var kb = window.innerHeight - vv.height - vv.offsetTop;
-        setKbOpen(kb > 20);
-        var target = kb > 20 ? kb + 'px' : '';
+        var kb = kbHeight();
+        setKbOpen(kb > KB_MIN);
+        var target = kb > KB_MIN ? kb + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
         }
-        if (s.autoAdjust) {
-            // 键盘动画结束后 250ms 复核一次，被顶掉就立刻修正
-            clearTimeout(kbVerifyTimer);
-            kbVerifyTimer = setTimeout(verifyPin, 250);
-        }
     }
 
-    // 自适应轮询：键盘弹起时加密到 300ms，收起后回到 1s
+    // 自适应轮询：键盘弹起时 300ms 核对一次，收起后 1s（省电）
     var timer = null;
+    var kbOpen = false;
     function setKbOpen(v) {
         if (kbOpen !== v) {
             kbOpen = v;
@@ -97,22 +100,22 @@
         var ms = (s.autoAdjust && kbOpen) ? 300 : 1000;
         timer = setInterval(function () {
             applyFix();
-            pinSendForm();
+            verifyPin();
         }, ms);
     }
 
-    // 复核：钉住被顶掉→重钉；输入框高度被改走→还原
+    // 定时器职责：核对并自愈——钉住被顶掉→重钉；高度被改走→还原
     function verifyPin() {
         var form = document.getElementById('send_form');
         var ta = document.getElementById('send_textarea');
-        var vv = window.visualViewport;
-        if (!form || !ta || !s.enabled) return;
-        var kb = vv ? (window.innerHeight - vv.height - vv.offsetTop) : 0;
-        var target = (s.pinKeyboard && kb > 20) ? kb + 'px' : '';
+        if (!form || !s.enabled) return;
+        var kb = kbHeight();
+        var target = (s.pinKeyboard && kb > KB_MIN) ? kb + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
             logStatus('检测到键盘钉住被顶掉，已自动修正');
         }
+        if (!IS_TOUCH || !ta) return;
         var cs = window.getComputedStyle(ta);
         var want = s.height + 'px';
         if (cs.height !== want) {
@@ -125,7 +128,7 @@
 
     function applyAll() {
         var root = document.documentElement;
-        if (s.enabled) {
+        if (s.enabled && IS_TOUCH) {
             root.style.setProperty('--stif-height', s.height + 'px');
         } else {
             root.style.setProperty('--stif-height', '');
@@ -136,19 +139,34 @@
         refreshTimer();
     }
 
-    // 发送后自动聚焦（默认关）
+    // 发送后自动聚焦（默认关）：只认新增的「用户消息」节点，AI 回复不触发
     var focusObserver = null;
+    function isUserMessageNode(n) {
+        if (!n || n.nodeType !== 1) return false;
+        if (n.classList && n.classList.contains('mes') && n.classList.contains('user')) return true;
+        if (n.querySelector && n.querySelector('.mes.user')) return true;
+        return false;
+    }
     function updateFocusObserver() {
-        if (s.enabled && s.focusAfterSend) {
+        if (s.enabled && s.focusAfterSend && IS_TOUCH) {
             if (focusObserver) return;
             var chat = document.getElementById('chat');
             if (!chat || !window.MutationObserver) return;
             var firstRun = true;
-            focusObserver = new MutationObserver(function () {
+            focusObserver = new MutationObserver(function (muts) {
                 if (firstRun) { firstRun = false; return; }
-                var ta = document.getElementById('send_textarea');
-                if (ta && document.activeElement !== ta) {
-                    try { ta.focus(); } catch (e) {}
+                var found = false;
+                for (var i = 0; i < muts.length && !found; i++) {
+                    var added = muts[i].addedNodes;
+                    for (var j = 0; j < added.length; j++) {
+                        if (isUserMessageNode(added[j])) { found = true; break; }
+                    }
+                }
+                if (found) {
+                    var ta = document.getElementById('send_textarea');
+                    if (ta && document.activeElement !== ta) {
+                        try { ta.focus(); } catch (e) {}
+                    }
                 }
             });
             focusObserver.observe(chat, { childList: true });
@@ -160,8 +178,8 @@
 
     applyAll();
 
-    // 仅在移动端挂键盘事件
-    if ('ontouchstart' in window && window.visualViewport) {
+    // 触屏端挂键盘事件（实时写入路径）
+    if (IS_TOUCH && window.visualViewport) {
         var rafPending = false;
         function schedulePin() {
             if (rafPending) return;
@@ -270,8 +288,7 @@
             }
             var cs = window.getComputedStyle(ta);
             var want = s.height + 'px';
-            var vv = window.visualViewport;
-            var kb = vv ? (window.innerHeight - vv.height - vv.offsetTop) : 0;
+            var kb = kbHeight();
             var parts = [];
             parts.push('扩展 ' + (s.enabled ? '启用' : '停用'));
             if (s.enabled) {
@@ -281,7 +298,7 @@
                     ta.style.minHeight = want;
                     ta.style.maxHeight = want;
                 }
-                parts.push('键盘 ' + (kb > 20 ? '弹起中' : '收起'));
+                parts.push('键盘 ' + (kb > KB_MIN ? '弹起中' : '收起'));
                 parts.push('钉住 ' + (form.style.bottom ? '生效' : '待命'));
             }
             logStatus(parts.join(' · '));
