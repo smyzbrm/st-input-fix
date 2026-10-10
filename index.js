@@ -1,16 +1,14 @@
-// 酒馆输入框修复助手 v3.12
+// 酒馆输入框修复助手 v3.13
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.12 修复（输入时输入栏掉下去的真 bug）：
-//  1) 键盘测量去掉 offsetTop：输入时滚动聊天/页面会让 offsetTop 变化，旧公式把键盘高度算小、
-//     掉到阈值下被误判“键盘收起”→ 输入栏掉下去。改回 innerHeight - vv.height，滚动不再误判
-//  2) 位置钳制上限 512px：滚动时宁可稍浮高，绝不掉到键盘后面
-//  3) 收起判定加 120ms 防抖：瞬时抖动不立即清空，确认键盘真收了才归位
+// v3.13 修复：
+//  一键更新改多通道阶梯：extensions.js（酒馆扩展管理真实入口）→ settings.js → 绝对路径 → window 全局
+//  修掉「点击自动更新显示不可用」——1.18 的更新 API 挂在 extensions.js，之前只试了 settings.js
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.12';
-    var CURRENT_VERSION = '3.12.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.13';
+    var CURRENT_VERSION = '3.13.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -333,23 +331,76 @@
         if (!el) return;
         el.textContent = '正在更新，请稍候…';
         el.style.color = '';
-        // 动态导入酒馆设置模块，走它自带的 Git 更新机制；失败则提示手动重装
-        import('../../../settings.js')
-            .then(function (mod) {
-                var S = mod.Settings || (mod.default && mod.default.Settings) || window.Settings;
-                if (S && typeof S.updateExtension === 'function') {
-                    S.updateExtension('st-input-fix');
-                    setUpdateLine('更新已触发，重启酒馆后生效', false);
-                } else if (S && typeof S.updateAllExtensions === 'function') {
-                    S.updateAllExtensions();
+        // 多通道阶梯尝试酒馆的更新 API：
+        // 1) ../extensions.js（1.18 扩展管理的真实入口，updateExtension/updateAllExtensions 在这里）
+        // 2) ../settings.js（Settings 对象，历史入口）
+        // 3) /scripts 绝对路径再试（防挂载路径差异）
+        // 4) window 全局兜底
+        var sources = [
+            { type: 'module', url: '../../../extensions.js' },
+            { type: 'module', url: '../../../settings.js' },
+            { type: 'module', url: '/scripts/extensions.js' },
+            { type: 'module', url: '/scripts/settings.js' },
+            { type: 'window' }
+        ];
+        function pick(mod, key) {
+            return mod && (mod[key] || (mod.default && mod.default[key]));
+        }
+        function attempt(i) {
+            if (i >= sources.length) {
+                setUpdateLine('自动更新不可用，请手动下载新 zip 重装', false);
+                return;
+            }
+            var src = sources[i];
+            var step;
+            if (src.type === 'module') {
+                step = import(src.url).then(function (mod) {
+                    var S = mod.Settings || (mod.default && mod.default.Settings) || window.Settings;
+                    var fnU = pick(mod, 'updateExtension');
+                    var fnA = pick(mod, 'updateAllExtensions');
+                    if (S && typeof S.updateExtension === 'function') {
+                        S.updateExtension('st-input-fix');
+                        return true;
+                    }
+                    if (typeof fnU === 'function') {
+                        fnU('st-input-fix');
+                        return true;
+                    }
+                    if (S && typeof S.updateAllExtensions === 'function') {
+                        S.updateAllExtensions();
+                        return true;
+                    }
+                    if (typeof fnA === 'function') {
+                        fnA();
+                        return true;
+                    }
+                    throw new Error('no api in ' + src.url);
+                });
+            } else {
+                step = Promise.resolve().then(function () {
+                    var W = window.Settings || window;
+                    if (W && typeof W.updateExtension === 'function') {
+                        W.updateExtension('st-input-fix');
+                        return true;
+                    }
+                    if (W && typeof W.updateAllExtensions === 'function') {
+                        W.updateAllExtensions();
+                        return true;
+                    }
+                    throw new Error('no window api');
+                });
+            }
+            step.then(function (ok) {
+                if (ok) {
                     setUpdateLine('更新已触发，重启酒馆后生效', false);
                 } else {
-                    setUpdateLine('自动更新不可用，请手动卸载重装', false);
+                    attempt(i + 1);
                 }
-            })
-            .catch(function () {
-                setUpdateLine('自动更新不可用，请手动卸载重装', false);
+            }).catch(function () {
+                attempt(i + 1);
             });
+        }
+        attempt(0);
     }
 
     // ---- 扩展面板设置块 ----
