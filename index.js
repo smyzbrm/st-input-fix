@@ -1,14 +1,22 @@
-// 酒馆输入框修复助手 v3.2
+// 酒馆输入框修复助手 v3.3
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 扩展面板设置块（可折叠）
-// v3.2 新增：面板显示版本号+生效状态摘要+状态点；高度 ±4px 微调按钮；暗色主题适配；
-//           「发送后自动聚焦输入框」可选开关（默认关，不影响原有体验）
+// v3.3 新增「自动检测与自愈」：检测键盘钉住是否被顶掉、输入框高度是否被改走、键盘弹收是否异常，
+//       发现即自动修复；键盘弹起期间轮询加速到 300ms 防复发，收起后回到 1s 省电；
+//       面板新增「立即自检」按钮与检测日志行，可随时查看它做了什么
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.2';
+    var VERSION = 'v3.3';
     var KEY = 'st-input-fix-settings';
-    var DEFAULTS = { enabled: true, height: 44, pinKeyboard: true, collapsed: false, focusAfterSend: false };
+    var DEFAULTS = {
+        enabled: true,
+        height: 44,
+        pinKeyboard: true,
+        collapsed: false,
+        focusAfterSend: false,
+        autoAdjust: true
+    };
     var s = Object.assign({}, DEFAULTS);
 
     try {
@@ -20,6 +28,7 @@
 
     s.collapsed = !!s.collapsed;
     s.focusAfterSend = !!s.focusAfterSend;
+    s.autoAdjust = s.autoAdjust !== false;
 
     function save() {
         try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {}
@@ -48,19 +57,69 @@
         }
     }
 
+    // ---- 键盘钉住 ----
+    var kbOpen = false;
+    var kbVerifyTimer = null;
+
     function pinSendForm() {
         var form = document.getElementById('send_form');
         if (!form) return;
         if (!s.enabled || !s.pinKeyboard) {
             if (form.style.bottom) form.style.bottom = '';
+            setKbOpen(false);
             return;
         }
         var vv = window.visualViewport;
         if (!vv) return;
         var kb = window.innerHeight - vv.height - vv.offsetTop;
+        setKbOpen(kb > 20);
         var target = kb > 20 ? kb + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
+        }
+        if (s.autoAdjust) {
+            // 键盘动画结束后 250ms 复核一次，被顶掉就立刻修正
+            clearTimeout(kbVerifyTimer);
+            kbVerifyTimer = setTimeout(verifyPin, 250);
+        }
+    }
+
+    // 自适应轮询：键盘弹起时加密到 300ms，收起后回到 1s
+    var timer = null;
+    function setKbOpen(v) {
+        if (kbOpen !== v) {
+            kbOpen = v;
+            refreshTimer();
+        }
+    }
+    function refreshTimer() {
+        if (timer) clearInterval(timer);
+        var ms = (s.autoAdjust && kbOpen) ? 300 : 1000;
+        timer = setInterval(function () {
+            applyFix();
+            pinSendForm();
+        }, ms);
+    }
+
+    // 复核：钉住被顶掉→重钉；输入框高度被改走→还原
+    function verifyPin() {
+        var form = document.getElementById('send_form');
+        var ta = document.getElementById('send_textarea');
+        var vv = window.visualViewport;
+        if (!form || !ta || !s.enabled) return;
+        var kb = vv ? (window.innerHeight - vv.height - vv.offsetTop) : 0;
+        var target = (s.pinKeyboard && kb > 20) ? kb + 'px' : '';
+        if (form.style.bottom !== target) {
+            form.style.bottom = target;
+            logStatus('检测到键盘钉住被顶掉，已自动修正');
+        }
+        var cs = window.getComputedStyle(ta);
+        var want = s.height + 'px';
+        if (cs.height !== want) {
+            ta.style.height = want;
+            ta.style.minHeight = want;
+            ta.style.maxHeight = want;
+            logStatus('检测到输入框高度被改走，已自动还原');
         }
     }
 
@@ -74,9 +133,10 @@
         applyFix();
         pinSendForm();
         updateFocusObserver();
+        refreshTimer();
     }
 
-    // 发送后自动聚焦（默认关）：仅当开启且启用时，检测到新消息节点出现就归还焦点
+    // 发送后自动聚焦（默认关）
     var focusObserver = null;
     function updateFocusObserver() {
         if (s.enabled && s.focusAfterSend) {
@@ -115,11 +175,13 @@
         window.visualViewport.addEventListener('scroll', schedulePin);
     }
 
-    // 低频兜底：酒馆重渲染后新元素也要被处理；值没变时内部直接跳过
-    setInterval(function () {
-        applyFix();
-        pinSendForm();
-    }, 1000);
+    // ---- 面板检测日志 ----
+    var lastLog = '';
+    function logStatus(msg) {
+        lastLog = msg;
+        var el = document.getElementById('stif-statuslog');
+        if (el) el.textContent = '最近检测：' + msg;
+    }
 
     // ---- 扩展面板设置块 ----
     function buildUI() {
@@ -137,11 +199,13 @@
             '</div>' +
             '<div id="stif-body" style="padding:0 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:14px;">' +
             '<div id="stif-summary" style="font-size:12px;opacity:0.75;"></div>' +
+            '<div id="stif-statuslog" style="font-size:12px;opacity:0.75;background:var(--SmartThemeBodyBackground, #eef3f1);border-radius:4px;padding:4px 6px;">最近检测：等待中</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-enabled" style="width:16px;height:16px;"> 启用修复</label>' +
             '<div style="display:flex;align-items:center;gap:6px;">输入框高度 <button id="stif-dec" type="button" style="padding:2px 10px;">−</button> <input type="number" id="stif-height" min="24" max="120" step="1" style="width:62px;"> <button id="stif-inc" type="button" style="padding:2px 10px;">+</button> px</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-pin" style="width:16px;height:16px;"> 键盘弹起时钉住输入栏</label>' +
+            '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-auto" style="width:16px;height:16px;"> 自动检测并调节（异常自动修复）</label>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-focus" style="width:16px;height:16px;"> 发送后自动聚焦输入框（连聊不用再点）</label>' +
-            '<div><button id="stif-reset" type="button" style="padding:4px 12px;">恢复默认</button></div>' +
+            '<div style="display:flex;align-items:center;gap:8px;"><button id="stif-check" type="button" style="padding:4px 12px;">立即自检</button><button id="stif-reset" type="button" style="padding:4px 12px;">恢复默认</button></div>' +
             '<div style="font-size:12px;opacity:0.7;">修改即时生效，只影响输入框样式，不碰存档与角色卡</div>' +
             '</div></div>';
         container.insertAdjacentHTML('beforeend', html);
@@ -149,8 +213,10 @@
         var cbEnable = document.getElementById('stif-enabled');
         var numHeight = document.getElementById('stif-height');
         var cbPin = document.getElementById('stif-pin');
+        var cbAuto = document.getElementById('stif-auto');
         var cbFocus = document.getElementById('stif-focus');
         var btnReset = document.getElementById('stif-reset');
+        var btnCheck = document.getElementById('stif-check');
         var btnDec = document.getElementById('stif-dec');
         var btnInc = document.getElementById('stif-inc');
         var header = document.getElementById('stif-header');
@@ -163,6 +229,7 @@
             cbEnable.checked = !!s.enabled;
             numHeight.value = s.height;
             cbPin.checked = !!s.pinKeyboard;
+            cbAuto.checked = !!s.autoAdjust;
             cbFocus.checked = !!s.focusAfterSend;
             body.style.display = s.collapsed ? 'none' : 'flex';
             caret.textContent = s.collapsed ? '▸' : '▾';
@@ -172,11 +239,14 @@
                 parts.push('已启用');
                 parts.push('高度 ' + s.height + 'px');
                 parts.push('键盘钉住 ' + (s.pinKeyboard ? '开' : '关'));
+                parts.push('自动调节 ' + (s.autoAdjust ? '开' : '关'));
                 parts.push('发送聚焦 ' + (s.focusAfterSend ? '开' : '关'));
             } else {
                 parts.push('已停用（样式已还原）');
             }
             summary.textContent = parts.join(' · ');
+            var logEl = document.getElementById('stif-statuslog');
+            if (logEl) logEl.textContent = lastLog ? ('最近检测：' + lastLog) : '最近检测：等待中';
         }
 
         function bumpHeight(delta) {
@@ -187,6 +257,34 @@
             numHeight.value = v;
             save();
             applyAll();
+            refreshUI();
+        }
+
+        function selfCheck() {
+            var ta = document.getElementById('send_textarea');
+            var form = document.getElementById('send_form');
+            if (!ta || !form) {
+                logStatus('找不到输入框元素（页面还没加载完）');
+                refreshUI();
+                return;
+            }
+            var cs = window.getComputedStyle(ta);
+            var want = s.height + 'px';
+            var vv = window.visualViewport;
+            var kb = vv ? (window.innerHeight - vv.height - vv.offsetTop) : 0;
+            var parts = [];
+            parts.push('扩展 ' + (s.enabled ? '启用' : '停用'));
+            if (s.enabled) {
+                parts.push('高度 ' + (cs.height === want ? '正常' : '异常→已还原'));
+                if (cs.height !== want) {
+                    ta.style.height = want;
+                    ta.style.minHeight = want;
+                    ta.style.maxHeight = want;
+                }
+                parts.push('键盘 ' + (kb > 20 ? '弹起中' : '收起'));
+                parts.push('钉住 ' + (form.style.bottom ? '生效' : '待命'));
+            }
+            logStatus(parts.join(' · '));
             refreshUI();
         }
 
@@ -218,6 +316,14 @@
             applyAll();
             refreshUI();
         });
+        cbAuto.addEventListener('change', function () {
+            s.autoAdjust = cbAuto.checked;
+            save();
+            applyAll();
+            refreshUI();
+            logStatus(s.autoAdjust ? '自动检测已开启' : '自动检测已关闭');
+            refreshUI();
+        });
         cbFocus.addEventListener('change', function () {
             s.focusAfterSend = cbFocus.checked;
             save();
@@ -226,10 +332,13 @@
         });
         btnDec.addEventListener('click', function () { bumpHeight(-4); });
         btnInc.addEventListener('click', function () { bumpHeight(4); });
+        btnCheck.addEventListener('click', selfCheck);
         btnReset.addEventListener('click', function () {
             Object.assign(s, DEFAULTS);
             save();
             applyAll();
+            refreshUI();
+            logStatus('已恢复默认设置');
             refreshUI();
         });
 
