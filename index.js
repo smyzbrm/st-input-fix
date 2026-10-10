@@ -1,16 +1,14 @@
-// 酒馆输入框修复助手 v3.7
+// 酒馆输入框修复助手 v3.8
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.7 修复：
-//  1) 设置存档清洗：高度钳制 24~120、布尔值统一转换，防坏数据弄崩输入框
-//  2) 静默窗口竞态：键盘收起 600ms 内重新弹起时自动取消静默，钉住不缺席
-//  3) 高度自愈防空转：主题用 !important 压高度时不再每秒重复还原+刷日志
-//  4) 面板容器晚加载：扩展设置容器未就绪时延迟重试，设置块与更新检查不再丢失
+// v3.8 修复：
+//  1) 「自动检测并调节」开关真正生效：关闭后彻底停掉自愈轮询（事件钉住不受影响），不再 1 秒空转
+//  2) 停用/桌面端不再跑空轮询定时器（省电），开关回调清理重复刷新
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.7';
-    var CURRENT_VERSION = '3.7.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.8';
+    var CURRENT_VERSION = '3.8.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -122,7 +120,10 @@
     }
     function refreshTimer() {
         if (timer) clearInterval(timer);
-        var ms = (s.autoAdjust && kbOpen) ? 300 : 1000;
+        timer = null;
+        // 停用 / 桌面端 / 自动检测关闭 → 不跑轮询（省电，且保证“自动检测”开关真正生效）
+        if (!s.enabled || !IS_TOUCH || !s.autoAdjust) return;
+        var ms = kbOpen ? 300 : 1000;
         timer = setInterval(function () {
             if (Date.now() < quietUntil) return; // 收起动画期间静默
             applyFix();
@@ -445,8 +446,7 @@
             s.autoAdjust = cbAuto.checked;
             save();
             applyAll();
-            refreshUI();
-            logStatus(s.autoAdjust ? '自动检测已开启' : '自动检测已关闭');
+            logStatus(s.autoAdjust ? '自动检测已开启' : '自动检测已关闭（不再自动修复）');
             refreshUI();
         });
         cbFocus.addEventListener('change', function () {
