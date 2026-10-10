@@ -1,15 +1,16 @@
-// 酒馆输入框修复助手 v3.11
+// 酒馆输入框修复助手 v3.12
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.11 修复：
-//  1) kbHeight 负值钳制为 0，防个别 WebView offsetTop 异常写入脏值
-//  2) 「立即自检」如实诊断：主题 !important 锁死高度时显示「被主题锁定」，不再假装还原
-//  3) 发送聚焦补「页面可见才聚焦」守卫
+// v3.12 修复（输入时输入栏掉下去的真 bug）：
+//  1) 键盘测量去掉 offsetTop：输入时滚动聊天/页面会让 offsetTop 变化，旧公式把键盘高度算小、
+//     掉到阈值下被误判“键盘收起”→ 输入栏掉下去。改回 innerHeight - vv.height，滚动不再误判
+//  2) 位置钳制上限 512px：滚动时宁可稍浮高，绝不掉到键盘后面
+//  3) 收起判定加 120ms 防抖：瞬时抖动不立即清空，确认键盘真收了才归位
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.11';
-    var CURRENT_VERSION = '3.11.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.12';
+    var CURRENT_VERSION = '3.12.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -74,18 +75,25 @@
         }
     }
 
+    // 键盘可见高度：innerHeight - vv.height
+    // 不减去 offsetTop：输入时滚动聊天/页面会让 offsetTop 变化，减去它会把高度算小，
+    // 掉到阈值下被误判“键盘收起”→ 输入栏掉下去（v3.12 根治）
     function kbHeight() {
         var vv = window.visualViewport;
         if (!vv) return 0;
-        var kb = window.innerHeight - vv.height - vv.offsetTop;
-        return kb > 0 ? kb : 0; // 个别 WebView offsetTop 异常会算出负值，钳制为 0
+        var kb = window.innerHeight - vv.height;
+        return kb > 0 ? kb : 0;
     }
 
+    // 收起确认防抖定时器（120ms 内不再收到“键盘还开着”的事件才真收起）
+    var pendingCloseTimer = null;
+
     // 事件路径：键盘动画期间实时写入
-    function pinSendForm() {
+    function pinSendForm(isDeferred) {
         var form = document.getElementById('send_form');
         if (!form) return;
         if (!s.enabled || !s.pinKeyboard) {
+            if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); pendingCloseTimer = null; }
             if (form.style.bottom) form.style.bottom = '';
             setKbOpen(false);
             return;
@@ -98,14 +106,27 @@
         }
         if (inQuiet) quietUntil = 0; // 静默窗口内键盘重开：取消静默，立即钉住
         var wasOpen = kbOpen;
-        setKbOpen(kb > KB_MIN);
-        if (s.quickCollapse && wasOpen && kb <= KB_MIN) {
-            // 键盘开始收起：立即归位，进入静默窗口，让回弹更顺
+        var openNow = kb > KB_MIN;
+        if (wasOpen && !openNow && !isDeferred) {
+            // 疑似收起：不立即清空，等 120ms 确认（瞬时抖动/滚动导致的误判不触发掉落）
+            if (!pendingCloseTimer) {
+                pendingCloseTimer = setTimeout(function () {
+                    pendingCloseTimer = null;
+                    pinSendForm(true);
+                }, 120);
+            }
+            return;
+        }
+        if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); pendingCloseTimer = null; }
+        setKbOpen(openNow);
+        if (s.quickCollapse && wasOpen && !openNow) {
+            // 键盘真收了：立即归位，进入静默窗口，让回弹更顺
             if (form.style.bottom) form.style.bottom = '';
             quietUntil = Date.now() + 600;
             return;
         }
-        var target = kb > KB_MIN ? kb + 'px' : '';
+        // 位置钳制上限 512px：滚动时宁可稍浮高，绝不掉到键盘后面
+        var target = openNow ? Math.min(kb, 512) + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
         }
@@ -140,7 +161,7 @@
         var ta = document.getElementById('send_textarea');
         if (!form || !s.enabled) return;
         var kb = kbHeight();
-        var target = (s.pinKeyboard && kb > KB_MIN) ? kb + 'px' : '';
+        var target = (s.pinKeyboard && kb > KB_MIN) ? Math.min(kb, 512) + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
             logStatus('键盘状态变化，已自动修正');
