@@ -1,16 +1,15 @@
-// 酒馆输入框修复助手 v3.10
+// 酒馆输入框修复助手 v3.11
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.10 修复：
-//  1) 更新检查改三源兜底：GitHub API（无缓存最新）→ raw 带时间戳 → jsDelivr 镜像，
-//     修掉「推了新版本面板却显示已最新」的 CDN 缓存坑（验证时踩过两次）
-//  2) 自愈日志文案中文化，键盘正常归位不再误报「被顶掉」
-//  3) 清理发送聚焦改版后遗留的未使用函数
+// v3.11 修复：
+//  1) kbHeight 负值钳制为 0，防个别 WebView offsetTop 异常写入脏值
+//  2) 「立即自检」如实诊断：主题 !important 锁死高度时显示「被主题锁定」，不再假装还原
+//  3) 发送聚焦补「页面可见才聚焦」守卫
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.10';
-    var CURRENT_VERSION = '3.10.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.11';
+    var CURRENT_VERSION = '3.11.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -78,7 +77,8 @@
     function kbHeight() {
         var vv = window.visualViewport;
         if (!vv) return 0;
-        return window.innerHeight - vv.height - vv.offsetTop;
+        var kb = window.innerHeight - vv.height - vv.offsetTop;
+        return kb > 0 ? kb : 0; // 个别 WebView offsetTop 异常会算出负值，钳制为 0
     }
 
     // 事件路径：键盘动画期间实时写入
@@ -209,7 +209,7 @@
                         }
                     }
                 }
-                if (foundMes && isAtChatEnd(foundMes)) {
+                if (foundMes && isAtChatEnd(foundMes) && document.visibilityState !== 'hidden') {
                     var ta = document.getElementById('send_textarea');
                     if (ta && document.activeElement !== ta) {
                         try { ta.focus(); } catch (e) {}
@@ -428,11 +428,16 @@
             var parts = [];
             parts.push('扩展 ' + (s.enabled ? '启用' : '停用'));
             if (s.enabled) {
-                parts.push('高度 ' + (cs.height === want ? '正常' : '异常→已还原'));
-                if (cs.height !== want) {
+                if (cs.height === want) {
+                    parts.push('高度 正常');
+                } else if (ta.style.height === want) {
+                    // 内联已正确但计算值不对 → 主题 !important 锁死，自愈已让位，如实显示
+                    parts.push('高度 被主题锁定（无法覆盖）');
+                } else {
                     ta.style.height = want;
                     ta.style.minHeight = want;
                     ta.style.maxHeight = want;
+                    parts.push('高度 异常→已还原');
                 }
                 parts.push('键盘 ' + (kb > KB_MIN ? '弹起中' : '收起'));
                 parts.push('钉住 ' + (form.style.bottom ? '生效' : '待命'));
