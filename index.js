@@ -1,15 +1,13 @@
-// 酒馆输入框修复助手 v3.4
+// 酒馆输入框修复助手 v3.5
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠）
-// v3.4 优化：
-//  1) 键盘识别更准：阈值提到 80px，手机浏览器地址栏收起不再被误判成键盘
-//  2) 发送聚焦只认「用户消息」节点，AI 回复不再误弹键盘
-//  3) 桌面端自动不锁高度：非触屏设备保持酒馆原生输入框行为
-//  4) 职责分离：事件负责实时写入，定时器只做核对，写入更少更省
+// v3.5 新增「收起快速归位」：键盘一开始收起就立即把输入栏放回底部，并静默 600ms
+//       不做任何核对计算，减轻键盘回弹瞬间的页面负担（默认开启，可在面板关闭）
+// v3.4：键盘识别阈值 80px / 发送聚焦只认用户消息 / 桌面端不锁高度 / 事件写入与定时器核对分离
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.4';
+    var VERSION = 'v3.5';
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -20,7 +18,8 @@
         pinKeyboard: true,
         collapsed: false,
         focusAfterSend: false,
-        autoAdjust: true
+        autoAdjust: true,
+        quickCollapse: true
     };
     var s = Object.assign({}, DEFAULTS);
 
@@ -34,6 +33,10 @@
     s.collapsed = !!s.collapsed;
     s.focusAfterSend = !!s.focusAfterSend;
     s.autoAdjust = s.autoAdjust !== false;
+    s.quickCollapse = s.quickCollapse !== false;
+
+    // 键盘收起动画期间的静默窗口（毫秒）
+    var quietUntil = 0;
 
     function save() {
         try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {}
@@ -79,7 +82,14 @@
             return;
         }
         var kb = kbHeight();
+        var wasOpen = kbOpen;
         setKbOpen(kb > KB_MIN);
+        if (s.quickCollapse && wasOpen && kb <= KB_MIN) {
+            // 键盘开始收起：立即归位，进入静默窗口，让回弹更顺
+            if (form.style.bottom) form.style.bottom = '';
+            quietUntil = Date.now() + 600;
+            return;
+        }
         var target = kb > KB_MIN ? kb + 'px' : '';
         if (form.style.bottom !== target) {
             form.style.bottom = target;
@@ -99,6 +109,7 @@
         if (timer) clearInterval(timer);
         var ms = (s.autoAdjust && kbOpen) ? 300 : 1000;
         timer = setInterval(function () {
+            if (Date.now() < quietUntil) return; // 收起动画期间静默
             applyFix();
             verifyPin();
         }, ms);
@@ -106,6 +117,7 @@
 
     // 定时器职责：核对并自愈——钉住被顶掉→重钉；高度被改走→还原
     function verifyPin() {
+        if (Date.now() < quietUntil) return; // 收起动画期间静默
         var form = document.getElementById('send_form');
         var ta = document.getElementById('send_textarea');
         if (!form || !s.enabled) return;
@@ -182,6 +194,7 @@
     if (IS_TOUCH && window.visualViewport) {
         var rafPending = false;
         function schedulePin() {
+            if (Date.now() < quietUntil) return; // 收起动画期间静默
             if (rafPending) return;
             rafPending = true;
             requestAnimationFrame(function () {
@@ -221,6 +234,7 @@
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-enabled" style="width:16px;height:16px;"> 启用修复</label>' +
             '<div style="display:flex;align-items:center;gap:6px;">输入框高度 <button id="stif-dec" type="button" style="padding:2px 10px;">−</button> <input type="number" id="stif-height" min="24" max="120" step="1" style="width:62px;"> <button id="stif-inc" type="button" style="padding:2px 10px;">+</button> px</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-pin" style="width:16px;height:16px;"> 键盘弹起时钉住输入栏</label>' +
+            '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-quick" style="width:16px;height:16px;"> 收起快速归位（键盘回弹更顺）</label>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-auto" style="width:16px;height:16px;"> 自动检测并调节（异常自动修复）</label>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-focus" style="width:16px;height:16px;"> 发送后自动聚焦输入框（连聊不用再点）</label>' +
             '<div style="display:flex;align-items:center;gap:8px;"><button id="stif-check" type="button" style="padding:4px 12px;">立即自检</button><button id="stif-reset" type="button" style="padding:4px 12px;">恢复默认</button></div>' +
@@ -231,6 +245,7 @@
         var cbEnable = document.getElementById('stif-enabled');
         var numHeight = document.getElementById('stif-height');
         var cbPin = document.getElementById('stif-pin');
+        var cbQuick = document.getElementById('stif-quick');
         var cbAuto = document.getElementById('stif-auto');
         var cbFocus = document.getElementById('stif-focus');
         var btnReset = document.getElementById('stif-reset');
@@ -247,6 +262,7 @@
             cbEnable.checked = !!s.enabled;
             numHeight.value = s.height;
             cbPin.checked = !!s.pinKeyboard;
+            cbQuick.checked = !!s.quickCollapse;
             cbAuto.checked = !!s.autoAdjust;
             cbFocus.checked = !!s.focusAfterSend;
             body.style.display = s.collapsed ? 'none' : 'flex';
@@ -257,6 +273,7 @@
                 parts.push('已启用');
                 parts.push('高度 ' + s.height + 'px');
                 parts.push('键盘钉住 ' + (s.pinKeyboard ? '开' : '关'));
+                parts.push('快回 ' + (s.quickCollapse ? '开' : '关'));
                 parts.push('自动调节 ' + (s.autoAdjust ? '开' : '关'));
                 parts.push('发送聚焦 ' + (s.focusAfterSend ? '开' : '关'));
             } else {
@@ -329,6 +346,12 @@
         });
         cbPin.addEventListener('change', function () {
             s.pinKeyboard = cbPin.checked;
+            save();
+            applyAll();
+            refreshUI();
+        });
+        cbQuick.addEventListener('change', function () {
+            s.quickCollapse = cbQuick.checked;
             save();
             applyAll();
             refreshUI();
