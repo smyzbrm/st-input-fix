@@ -1,14 +1,14 @@
-// 酒馆输入框修复助手 v3.13
+// 酒馆输入框修复助手 v3.14
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.13 修复：
-//  一键更新改多通道阶梯：extensions.js（酒馆扩展管理真实入口）→ settings.js → 绝对路径 → window 全局
-//  修掉「点击自动更新显示不可用」——1.18 的更新 API 挂在 extensions.js，之前只试了 settings.js
+// v3.14 修复：
+//  1) 收起防抖成为唯一权威：防抖挂起期间自愈轮询让位，杜绝「瞬时抖动时定时器绕过防抖直接清空位置」
+//  2) 面板容器晚加载重试 3→5 次
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.13';
-    var CURRENT_VERSION = '3.13.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.14';
+    var CURRENT_VERSION = '3.14.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -155,6 +155,7 @@
     // 定时器职责：核对并自愈——钉住被顶掉→重钉；高度被改走→还原
     function verifyPin() {
         if (Date.now() < quietUntil) return; // 收起动画期间静默
+        if (pendingCloseTimer) return; // 收起防抖挂起中：让防抖判定，定时器不抢先清空位置
         var form = document.getElementById('send_form');
         var ta = document.getElementById('send_textarea');
         if (!form || !s.enabled) return;
@@ -589,7 +590,7 @@
         setInterval(checkUpdate, 30 * 60 * 1000); // 每 30 分钟复查
     }
 
-    // 面板容器晚加载时延迟重试，最多 3 次
+    // 面板容器晚加载时延迟重试，最多 5 次
     try {
         if (document.getElementById('extensions_settings')) {
             buildUI();
@@ -598,7 +599,7 @@
                 var tries = 0;
                 var step = function () {
                     tries++;
-                    if (tries > 3) return;
+                    if (tries > 5) return;
                     setTimeout(function () {
                         if (document.getElementById('extensions_settings')) {
                             buildUI();
