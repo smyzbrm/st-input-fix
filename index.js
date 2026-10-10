@@ -1,14 +1,15 @@
-// 酒馆输入框修复助手 v3.18
+// 酒馆输入框修复助手 v3.19
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.18 改进（更新可观测性）：
-//  1) 发现新版本时同时显示当前版本与远程版本，一眼看清差距
-//  2) 更新成功后显示 git commit 号，验证真的 pull 成功了
+// v3.19 修复：
+//  1) 更新失败原因直接红字显示在按钮那行，不再藏进检测日志
+//  2) 删除误导性的兜底阶梯（官方源码证实 updateExtension 从不导出，纯死路，只会盖住真原因）
+//  3) 兼容服务端返回 {error} 的失败形态
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.18';
-    var CURRENT_VERSION = '3.18.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.19';
+    var CURRENT_VERSION = '3.19.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -358,6 +359,9 @@
                 return resp.json();
             })
             .then(function (data) {
+                if (data && data.error) {
+                    throw new Error(String(data.error));
+                }
                 if (data && data.isUpToDate) {
                     setUpdateLine('已是最新版本 v' + CURRENT_VERSION, false);
                     logStatus('一键更新：已是最新版本');
@@ -369,78 +373,11 @@
                 return true;
             })
             .catch(function (e) {
-                logStatus('更新接口失败：' + (e && e.message ? e.message : e));
+                var msg = e && e.message ? e.message : String(e);
+                logStatus('更新接口失败：' + msg);
+                setUpdateLine('更新失败：' + msg, false);
                 return false;
             });
-    }
-    // 兜底阶梯（个别版本可能走 Settings.updateExtension 导出）：extensions.js → settings.js → 绝对路径 → window
-    function ladderUpdate() {
-        var sources = [
-            { type: 'module', url: '../../../extensions.js' },
-            { type: 'module', url: '../../../settings.js' },
-            { type: 'module', url: '/scripts/extensions.js' },
-            { type: 'module', url: '/scripts/settings.js' },
-            { type: 'window' }
-        ];
-        function pick(mod, key) {
-            return mod && (mod[key] || (mod.default && mod.default[key]));
-        }
-        function attempt(i) {
-            if (i >= sources.length) {
-                logStatus('备用通道均不可用，请手动下载新 zip 重装');
-                setUpdateLine('自动更新不可用，请手动下载新 zip 重装', false);
-                return;
-            }
-            var src = sources[i];
-            var step;
-            if (src.type === 'module') {
-                step = import(src.url).then(function (mod) {
-                    var S = mod.Settings || (mod.default && mod.default.Settings) || window.Settings;
-                    var fnU = pick(mod, 'updateExtension');
-                    var fnA = pick(mod, 'updateAllExtensions');
-                    if (S && typeof S.updateExtension === 'function') {
-                        S.updateExtension('st-input-fix');
-                        return true;
-                    }
-                    if (typeof fnU === 'function') {
-                        fnU('st-input-fix');
-                        return true;
-                    }
-                    if (S && typeof S.updateAllExtensions === 'function') {
-                        S.updateAllExtensions();
-                        return true;
-                    }
-                    if (typeof fnA === 'function') {
-                        fnA();
-                        return true;
-                    }
-                    throw new Error('no api in ' + src.url);
-                });
-            } else {
-                step = Promise.resolve().then(function () {
-                    var W = window.Settings || window;
-                    if (W && typeof W.updateExtension === 'function') {
-                        W.updateExtension('st-input-fix');
-                        return true;
-                    }
-                    if (W && typeof W.updateAllExtensions === 'function') {
-                        W.updateAllExtensions();
-                        return true;
-                    }
-                    throw new Error('no window api');
-                });
-            }
-            step.then(function (ok) {
-                if (ok) {
-                    setUpdateLine('更新已触发，重启酒馆后生效', false);
-                } else {
-                    attempt(i + 1);
-                }
-            }).catch(function () {
-                attempt(i + 1);
-            });
-        }
-        attempt(0);
     }
     var updating = false; // 更新防重入：双重点击不会并发两个请求
     function doUpdate() {
@@ -450,10 +387,7 @@
         el.textContent = '正在更新，请稍候…';
         el.style.color = '';
         tryApiUpdate().then(function (ok) {
-            if (!ok) {
-                logStatus('官方接口不可用，尝试备用通道');
-                ladderUpdate();
-            }
+            if (!ok) logStatus('一键更新失败，原因见上方红字');
             updating = false;
         });
     }
