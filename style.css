@@ -1,15 +1,15 @@
-/* 酒馆输入框修复助手 v1.1
-   目标：手机端输入框跳来跳去、不好打字
-   三层修复：
-   1) 输入框本体固定 44px，禁止自动增高/手动拉伸，文字超长时框内滚动
-   2) 聚焦态同样锁定（部分主题/浏览器聚焦时会触发增高）
-   3) 输入栏容器钉住最小高度，软键盘弹出/收起时整条输入栏不再上下跳 */
+/* 酒馆输入框修复助手 v3.0
+   高度通过 CSS 变量 --stif-height 控制，可在扩展面板里实时调整 */
+
+:root {
+  --stif-height: 44px;
+}
 
 textarea#send_textarea,
 textarea#send_textarea:focus {
-  height: 44px !important;
-  max-height: 44px !important;
-  min-height: 44px !important;
+  height: var(--stif-height) !important;
+  max-height: var(--stif-height) !important;
+  min-height: var(--stif-height) !important;
   resize: none !important;
   overflow-y: auto !important;
   overscroll-behavior: contain !important;
@@ -17,5 +17,5 @@ textarea#send_textarea:focus {
 }
 
 #send_form {
-  min-height: 44px !important;
+  min-height: var(--stif-height) !important;
 }
