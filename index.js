@@ -1,14 +1,15 @@
-// 酒馆输入框修复助手 v3.14
+// 酒馆输入框修复助手 v3.15
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.14 修复：
-//  1) 收起防抖成为唯一权威：防抖挂起期间自愈轮询让位，杜绝「瞬时抖动时定时器绕过防抖直接清空位置」
-//  2) 面板容器晚加载重试 3→5 次
+// v3.15 修复（一键更新真根治）：
+//  对照官方源码：extensions.js 并不导出 updateExtension；酒馆更新机制本质是
+//  POST /api/extensions/update（body: {extensionName, global}，头用 script.js 导出的 getRequestHeaders）。
+//  更新改为直接调用该官方接口，模块阶梯降为兜底。
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.14';
-    var CURRENT_VERSION = '3.14.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.15';
+    var CURRENT_VERSION = '3.15.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -327,16 +328,39 @@
         }
         tryNext(0);
     }
-    function doUpdate() {
-        var el = document.getElementById('stif-update');
-        if (!el) return;
-        el.textContent = '正在更新，请稍候…';
-        el.style.color = '';
-        // 多通道阶梯尝试酒馆的更新 API：
-        // 1) ../extensions.js（1.18 扩展管理的真实入口，updateExtension/updateAllExtensions 在这里）
-        // 2) ../settings.js（Settings 对象，历史入口）
-        // 3) /scripts 绝对路径再试（防挂载路径差异）
-        // 4) window 全局兜底
+    // 主通道：直接调用酒馆官方更新接口（对照官方源码实现）
+    // 从 script.js 动态导入 getRequestHeaders，POST /api/extensions/update
+    function tryApiUpdate() {
+        return import('../../../script.js')
+            .then(function (mod) {
+                var getHeaders = mod.getRequestHeaders || (mod.default && mod.default.getRequestHeaders);
+                if (typeof getHeaders !== 'function') {
+                    throw new Error('no getRequestHeaders');
+                }
+                return fetch('/api/extensions/update', {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ extensionName: 'st-input-fix', global: false })
+                });
+            })
+            .then(function (resp) {
+                if (!resp.ok) {
+                    return resp.text().then(function (t) { throw new Error('http ' + resp.status + ' ' + t); });
+                }
+                return resp.json();
+            })
+            .then(function (data) {
+                if (data && data.isUpToDate) {
+                    setUpdateLine('已是最新版本 v' + CURRENT_VERSION, false);
+                } else {
+                    setUpdateLine('更新成功，重启酒馆后生效', false);
+                }
+                return true;
+            })
+            .catch(function () { return false; });
+    }
+    // 兜底阶梯（个别版本可能走 Settings.updateExtension 导出）：extensions.js → settings.js → 绝对路径 → window
+    function ladderUpdate() {
         var sources = [
             { type: 'module', url: '../../../extensions.js' },
             { type: 'module', url: '../../../settings.js' },
@@ -402,6 +426,15 @@
             });
         }
         attempt(0);
+    }
+    function doUpdate() {
+        var el = document.getElementById('stif-update');
+        if (!el) return;
+        el.textContent = '正在更新，请稍候…';
+        el.style.color = '';
+        tryApiUpdate().then(function (ok) {
+            if (!ok) ladderUpdate();
+        });
     }
 
     // ---- 扩展面板设置块 ----
