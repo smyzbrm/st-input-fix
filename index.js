@@ -1,15 +1,14 @@
-// 酒馆输入框修复助手 v3.17
+// 酒馆输入框修复助手 v3.18
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.17 修复：
-//  1) 更新请求头不再强依赖 import 成功：script.js 导不出 getRequestHeaders 时，
-//     自动降级为自带请求头（Content-Type: application/json），POST 照常发出
-//  2) 每一步失败都写日志，原因可见
+// v3.18 改进（更新可观测性）：
+//  1) 发现新版本时同时显示当前版本与远程版本，一眼看清差距
+//  2) 更新成功后显示 git commit 号，验证真的 pull 成功了
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.17';
-    var CURRENT_VERSION = '3.17.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.18';
+    var CURRENT_VERSION = '3.18.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -319,7 +318,7 @@
                     if (!m || !m.version) throw new Error('bad manifest');
                     var latest = String(m.version);
                     if (cmpVersion(latest, CURRENT_VERSION) > 0) {
-                        setUpdateLine('发现新版本 v' + latest + '，点击更新', true);
+                        setUpdateLine('发现新版本 v' + latest + '（当前 v' + CURRENT_VERSION + '），点击更新', true);
                     } else {
                         setUpdateLine('当前已是最新版本 v' + CURRENT_VERSION, false);
                     }
@@ -363,8 +362,9 @@
                     setUpdateLine('已是最新版本 v' + CURRENT_VERSION, false);
                     logStatus('一键更新：已是最新版本');
                 } else {
-                    setUpdateLine('更新成功，重启酒馆后生效', false);
-                    logStatus('一键更新：成功，重启后生效');
+                    var hash = data && data.shortCommitHash ? '（commit ' + data.shortCommitHash + '）' : '';
+                    setUpdateLine('更新成功' + hash + '，重启酒馆后生效', false);
+                    logStatus('一键更新：成功' + hash + '，重启后生效');
                 }
                 return true;
             })
