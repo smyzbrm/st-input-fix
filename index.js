@@ -1,11 +1,12 @@
-// 酒馆输入框修复助手 v3.0
+// 酒馆输入框修复助手 v3.1
 // 新增：扩展面板里的设置块（总开关 / 输入框高度 / 键盘钉住 / 恢复默认），修改即时生效
+// v3.1：设置块标题可点击折叠/展开，折叠状态自动记住
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
     var KEY = 'st-input-fix-settings';
-    var DEFAULTS = { enabled: true, height: 44, pinKeyboard: true };
+    var DEFAULTS = { enabled: true, height: 44, pinKeyboard: true, collapsed: false };
     var s = Object.assign({}, DEFAULTS);
 
     try {
@@ -101,9 +102,11 @@
         if (panel) return; // 已存在
 
         var html = '' +
-            '<div id="st-input-fix-panel" style="margin-top:10px;padding:12px;border:1px solid var(--SmartThemeBorderColor, #d0d7de);border-radius:8px;background:var(--SmartThemeBlurTintColor, #f6f8fa);">' +
-            '<div style="font-weight:700;margin-bottom:8px;">酒馆输入框修复助手</div>' +
-            '<div style="display:flex;flex-direction:column;gap:8px;font-size:14px;">' +
+            '<div id="st-input-fix-panel" style="margin-top:10px;border:1px solid var(--SmartThemeBorderColor, #d0d7de);border-radius:8px;background:var(--SmartThemeBlurTintColor, #f6f8fa);overflow:hidden;">' +
+            '<div id="stif-header" style="display:flex;align-items:center;gap:6px;padding:10px 12px;cursor:pointer;user-select:none;font-weight:700;">' +
+            '<span id="stif-caret" style="display:inline-block;width:14px;">▾</span>酒馆输入框修复助手' +
+            '</div>' +
+            '<div id="stif-body" style="padding:0 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:14px;">' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-enabled" style="width:16px;height:16px;"> 启用修复</label>' +
             '<div style="display:flex;align-items:center;gap:6px;">输入框高度 <input type="number" id="stif-height" min="24" max="120" step="1" style="width:70px;"> px</div>' +
             '<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="stif-pin" style="width:16px;height:16px;"> 键盘弹起时钉住输入栏</label>' +
@@ -116,12 +119,23 @@
         var numHeight = document.getElementById('stif-height');
         var cbPin = document.getElementById('stif-pin');
         var btnReset = document.getElementById('stif-reset');
+        var header = document.getElementById('stif-header');
+        var body = document.getElementById('stif-body');
+        var caret = document.getElementById('stif-caret');
 
         function refreshUI() {
             cbEnable.checked = !!s.enabled;
             numHeight.value = s.height;
             cbPin.checked = !!s.pinKeyboard;
+            body.style.display = s.collapsed ? 'none' : 'flex';
+            caret.textContent = s.collapsed ? '▸' : '▾';
         }
+
+        header.addEventListener('click', function () {
+            s.collapsed = !s.collapsed;
+            save();
+            refreshUI();
+        });
 
         cbEnable.addEventListener('change', function () {
             s.enabled = cbEnable.checked;
