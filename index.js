@@ -1,15 +1,14 @@
-// 酒馆输入框修复助手 v3.19
+// 酒馆输入框修复助手 v3.20
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.19 修复：
-//  1) 更新失败原因直接红字显示在按钮那行，不再藏进检测日志
-//  2) 删除误导性的兜底阶梯（官方源码证实 updateExtension 从不导出，纯死路，只会盖住真原因）
-//  3) 兼容服务端返回 {error} 的失败形态
+// v3.20 修复（一键更新 CSRF 根治）：
+//  真机报错「INVALID csrf token」→ 酒馆 POST 接口需要 X-CSRF-Token 请求头，令牌会过期。
+//  更新前先现取 /csrf-token 拿到新令牌，页面挂再久也不会因令牌过期失败。
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.19';
-    var CURRENT_VERSION = '3.19.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.20';
+    var CURRENT_VERSION = '3.20.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -328,22 +327,40 @@
         }
         tryNext(0);
     }
+    // 现取酒馆 CSRF 令牌（官方机制：GET /csrf-token → {token}，POST 需带 X-CSRF-Token）
+    function fetchCsrfToken() {
+        return fetch('/csrf-token', { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) return '';
+                return r.json();
+            })
+            .then(function (d) {
+                return d && d.token ? String(d.token) : '';
+            })
+            .catch(function () { return ''; });
+    }
     // 主通道：直接调用酒馆官方更新接口（对照官方源码实现）
-    // 先尝试从 script.js 导入官方 getRequestHeaders；导入失败则用自带请求头，
-    // 确保 POST 一定能发出去（酒馆的 POST 接口只需 Content-Type: application/json）
+    // 请求头 = 官方 getRequestHeaders（若可导入）+ 现取的 X-CSRF-Token，令牌永远新鲜
     function tryApiUpdate() {
-        var officialHeaders = null;
         return import('../../../script.js')
             .then(function (mod) {
                 var getHeaders = mod.getRequestHeaders || (mod.default && mod.default.getRequestHeaders);
-                if (typeof getHeaders === 'function') {
-                    officialHeaders = getHeaders();
-                }
-                return officialHeaders || { 'Content-Type': 'application/json' };
+                return typeof getHeaders === 'function' ? getHeaders() : null;
             })
             .catch(function (e) {
                 logStatus('导入 script.js 失败，使用自带请求头：' + (e && e.message ? e.message : e));
-                return { 'Content-Type': 'application/json' };
+                return null;
+            })
+            .then(function (base) {
+                var headers = base || { 'Content-Type': 'application/json' };
+                return fetchCsrfToken().then(function (token) {
+                    if (token) {
+                        headers['X-CSRF-Token'] = token;
+                    } else {
+                        logStatus('未能取得 CSRF 令牌，更新可能被服务端拒绝');
+                    }
+                    return headers;
+                });
             })
             .then(function (headers) {
                 return fetch('/api/extensions/update', {
