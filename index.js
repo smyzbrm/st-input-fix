@@ -1,8 +1,8 @@
-// 酒馆输入框修复助手 v2.0
+// 酒馆输入框修复助手 v2.1
 // 修复点：
 //  1) 输入框固定 44px，禁止自动增高/拉伸（聚焦态同锁）
 //  2) 软键盘弹起时，把输入栏钉在键盘上沿，不再"落下去"
-//  3) 只在需要时才写样式，避免周期性重排造成跳动
+//  3) 性能优化：只在值变化时才写样式 + rAF 合并高频事件，键盘弹收不再卡顿
 // 不碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
@@ -25,29 +25,35 @@
         if (!form) return;
         var vv = window.visualViewport;
         if (!vv) return;
-        // 键盘占用高度 = 视口差
         var kb = window.innerHeight - vv.height - vv.offsetTop;
-        if (kb > 20) {
-            // 键盘弹起：把输入栏钉在键盘上沿
-            form.style.bottom = kb + 'px';
-        } else if (form.style.bottom) {
-            // 键盘收起：还原为默认
-            form.style.bottom = '';
+        var target = kb > 20 ? kb + 'px' : '';
+        // 只在值变化时写，避免无谓重排
+        if (form.style.bottom !== target) {
+            form.style.bottom = target;
         }
+    }
+
+    // rAF 合并高频的 resize/scroll 事件，一帧只写一次
+    var rafPending = false;
+    function schedulePin() {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(function () {
+            rafPending = false;
+            pinSendForm();
+        });
     }
 
     applyFix();
 
-    // 仅在移动端启用键盘钉住
     if ('ontouchstart' in window && window.visualViewport) {
-        window.visualViewport.addEventListener('resize', pinSendForm);
-        window.visualViewport.addEventListener('scroll', pinSendForm);
+        window.visualViewport.addEventListener('resize', schedulePin);
+        window.visualViewport.addEventListener('scroll', schedulePin);
     }
 
-    // 定时兜底：酒馆重渲染后新输入框也要被钉住；
-    // 已生效时函数内部会直接跳过，不产生重排
+    // 低频兜底：酒馆重渲染后新元素也要被钉住；值没变时内部直接跳过
     setInterval(function () {
         applyFix();
         pinSendForm();
-    }, 800);
+    }, 1000);
 })();
