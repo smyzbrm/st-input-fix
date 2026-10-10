@@ -1,15 +1,16 @@
-// 酒馆输入框修复助手 v3.6
-// 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠）
-// v3.6 新增「更新检查」：面板加载时自动检测 GitHub 最新版本；
-//       发现新版本 → 显示「发现新版本 vX，点击更新」（点击走酒馆自带 Git 更新机制）；
-//       没有新版本 → 显示「当前已是最新版本」；每 30 分钟自动复查一次
-// v3.5：收起快速归位 / v3.4：键盘识别阈值、发送聚焦只认用户消息、桌面端不锁高度
+// 酒馆输入框修复助手 v3.7
+// 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
+// v3.7 修复：
+//  1) 设置存档清洗：高度钳制 24~120、布尔值统一转换，防坏数据弄崩输入框
+//  2) 静默窗口竞态：键盘收起 600ms 内重新弹起时自动取消静默，钉住不缺席
+//  3) 高度自愈防空转：主题用 !important 压高度时不再每秒重复还原+刷日志
+//  4) 面板容器晚加载：扩展设置容器未就绪时延迟重试，设置块与更新检查不再丢失
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.6';
-    var CURRENT_VERSION = '3.6.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.7';
+    var CURRENT_VERSION = '3.7.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -33,6 +34,11 @@
         }
     } catch (e) { /* 忽略损坏的存档 */ }
 
+    // 清洗存档：防坏数据（高度越界/非数字、布尔被存成字符串等）
+    s.enabled = !!s.enabled;
+    s.pinKeyboard = !!s.pinKeyboard;
+    var hRaw = parseInt(s.height, 10);
+    s.height = (isNaN(hRaw) || hRaw < 24) ? 44 : (hRaw > 120 ? 120 : hRaw);
     s.collapsed = !!s.collapsed;
     s.focusAfterSend = !!s.focusAfterSend;
     s.autoAdjust = s.autoAdjust !== false;
@@ -85,6 +91,12 @@
             return;
         }
         var kb = kbHeight();
+        var inQuiet = Date.now() < quietUntil;
+        if (inQuiet && kb <= KB_MIN) {
+            setKbOpen(false);
+            return; // 静默窗口内且键盘未重开：不做事
+        }
+        if (inQuiet) quietUntil = 0; // 静默窗口内键盘重开：取消静默，立即钉住
         var wasOpen = kbOpen;
         setKbOpen(kb > KB_MIN);
         if (s.quickCollapse && wasOpen && kb <= KB_MIN) {
@@ -133,7 +145,8 @@
         if (!IS_TOUCH || !ta) return;
         var cs = window.getComputedStyle(ta);
         var want = s.height + 'px';
-        if (cs.height !== want) {
+        // 内联已正确但计算值仍不对 → 主题用 !important 压着，重复还原只会空转刷日志，跳过
+        if (cs.height !== want && ta.style.height !== want) {
             ta.style.height = want;
             ta.style.minHeight = want;
             ta.style.maxHeight = want;
@@ -197,7 +210,6 @@
     if (IS_TOUCH && window.visualViewport) {
         var rafPending = false;
         function schedulePin() {
-            if (Date.now() < quietUntil) return; // 收起动画期间静默
             if (rafPending) return;
             rafPending = true;
             requestAnimationFrame(function () {
@@ -218,7 +230,6 @@
     }
 
     // ---- 更新检查 ----
-    // 比较版本号 a vs b，返回 a>b 为 1，a<b 为 -1，相等为 0
     function cmpVersion(a, b) {
         var pa = String(a).split('.').map(function (x) { return parseInt(x, 10) || 0; });
         var pb = String(b).split('.').map(function (x) { return parseInt(x, 10) || 0; });
@@ -461,7 +472,26 @@
         setInterval(checkUpdate, 30 * 60 * 1000); // 每 30 分钟复查
     }
 
+    // 面板容器晚加载时延迟重试，最多 3 次
     try {
-        buildUI();
+        if (document.getElementById('extensions_settings')) {
+            buildUI();
+        } else {
+            (function retry() {
+                var tries = 0;
+                var step = function () {
+                    tries++;
+                    if (tries > 3) return;
+                    setTimeout(function () {
+                        if (document.getElementById('extensions_settings')) {
+                            buildUI();
+                        } else {
+                            step();
+                        }
+                    }, 1000);
+                };
+                step();
+            })();
+        }
     } catch (e) { /* UI 构建失败不影响核心修复 */ }
 })();
