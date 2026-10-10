@@ -1,14 +1,15 @@
-// 酒馆输入框修复助手 v3.16
+// 酒馆输入框修复助手 v3.17
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.16 修复：
-//  1) 更新防重入：双重点击不再并发两个 POST 更新请求
-//  2) 更新结果写进检测日志：成功/已最新/失败原因（HTTP 状态与错误信息）可见，方便排查
+// v3.17 修复：
+//  1) 更新请求头不再强依赖 import 成功：script.js 导不出 getRequestHeaders 时，
+//     自动降级为自带请求头（Content-Type: application/json），POST 照常发出
+//  2) 每一步失败都写日志，原因可见
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.16';
-    var CURRENT_VERSION = '3.16.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.17';
+    var CURRENT_VERSION = '3.17.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -328,17 +329,26 @@
         tryNext(0);
     }
     // 主通道：直接调用酒馆官方更新接口（对照官方源码实现）
-    // 从 script.js 动态导入 getRequestHeaders，POST /api/extensions/update
+    // 先尝试从 script.js 导入官方 getRequestHeaders；导入失败则用自带请求头，
+    // 确保 POST 一定能发出去（酒馆的 POST 接口只需 Content-Type: application/json）
     function tryApiUpdate() {
+        var officialHeaders = null;
         return import('../../../script.js')
             .then(function (mod) {
                 var getHeaders = mod.getRequestHeaders || (mod.default && mod.default.getRequestHeaders);
-                if (typeof getHeaders !== 'function') {
-                    throw new Error('getRequestHeaders 未导出');
+                if (typeof getHeaders === 'function') {
+                    officialHeaders = getHeaders();
                 }
+                return officialHeaders || { 'Content-Type': 'application/json' };
+            })
+            .catch(function (e) {
+                logStatus('导入 script.js 失败，使用自带请求头：' + (e && e.message ? e.message : e));
+                return { 'Content-Type': 'application/json' };
+            })
+            .then(function (headers) {
                 return fetch('/api/extensions/update', {
                     method: 'POST',
-                    headers: getHeaders(),
+                    headers: headers,
                     body: JSON.stringify({ extensionName: 'st-input-fix', global: false })
                 });
             })
