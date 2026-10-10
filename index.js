@@ -1,14 +1,16 @@
-// 酒馆输入框修复助手 v3.8
+// 酒馆输入框修复助手 v3.9
 // 功能：固定输入框高度 / 键盘弹起钉住输入栏 / 自动检测与自愈 / 扩展面板设置块（可折叠） / 更新检查
-// v3.8 修复：
-//  1) 「自动检测并调节」开关真正生效：关闭后彻底停掉自愈轮询（事件钉住不受影响），不再 1 秒空转
-//  2) 停用/桌面端不再跑空轮询定时器（省电），开关回调清理重复刷新
+// v3.9 修复：
+//  1) 发送后自动聚焦加防误触发：切角色/重载聊天（批量重建消息）不再抢焦点弹键盘，
+//     只在「新增恰好 1 条用户消息且位于聊天末尾」时聚焦
+//  2) applyFix 状态条件补全：resize/overflowY 被主题清掉时也能补回
+//  3) 恢复默认回调清理重复刷新；style.css 注释版本号同步
 // 设置保存在浏览器 localStorage，不触碰聊天数据、角色卡、世界书、存档或 API 配置
 (function () {
     'use strict';
 
-    var VERSION = 'v3.8';
-    var CURRENT_VERSION = '3.8.0'; // 与 manifest.json 同步
+    var VERSION = 'v3.9';
+    var CURRENT_VERSION = '3.9.0'; // 与 manifest.json 同步
     var KEY = 'st-input-fix-settings';
     var IS_TOUCH = 'ontouchstart' in window;
     var KB_MIN = 80; // 判定为软键盘的最小高度（px），排除地址栏收起/展开的干扰
@@ -64,7 +66,7 @@
             return;
         }
         var h = s.height + 'px';
-        if (ta.style.height !== h || ta.style.minHeight !== h || ta.style.maxHeight !== h) {
+        if (ta.style.height !== h || ta.style.minHeight !== h || ta.style.maxHeight !== h || ta.style.resize !== 'none' || ta.style.overflowY !== 'auto') {
             ta.style.height = h;
             ta.style.maxHeight = h;
             ta.style.minHeight = h;
@@ -176,6 +178,15 @@
         if (n.querySelector && n.querySelector('.mes.user')) return true;
         return false;
     }
+    // 该新增节点内的 .mes.user 是否就是聊天最后一条消息（排除切角色/重载的批量重建）
+    function isAtChatEnd(n) {
+        var mes = (n.classList && n.classList.contains('mes') && n.classList.contains('user'))
+            ? n
+            : (n.querySelector ? n.querySelector('.mes.user') : null);
+        if (!mes) return false;
+        var all = document.querySelectorAll('#chat .mes.user');
+        return all.length > 0 && all[all.length - 1] === mes;
+    }
     function updateFocusObserver() {
         if (s.enabled && s.focusAfterSend && IS_TOUCH) {
             if (focusObserver) return;
@@ -184,14 +195,27 @@
             var firstRun = true;
             focusObserver = new MutationObserver(function (muts) {
                 if (firstRun) { firstRun = false; return; }
-                var found = false;
-                for (var i = 0; i < muts.length && !found; i++) {
+                // 只接受「恰好新增 1 条 .mes.user」且位于聊天末尾 → 真正的发送，而非批量重建
+                var foundMes = null;
+                for (var i = 0; i < muts.length; i++) {
                     var added = muts[i].addedNodes;
                     for (var j = 0; j < added.length; j++) {
-                        if (isUserMessageNode(added[j])) { found = true; break; }
+                        var n = added[j];
+                        if (!n || n.nodeType !== 1) continue;
+                        var mes = (n.classList && n.classList.contains('mes') && n.classList.contains('user'))
+                            ? n
+                            : (n.querySelector ? n.querySelector('.mes.user') : null);
+                        if (!mes) continue;
+                        if (foundMes === null) {
+                            foundMes = mes;
+                        } else if (foundMes !== mes) {
+                            foundMes = null; // 一批多条 → 批量重建，跳过
+                            i = muts.length;
+                            break;
+                        }
                     }
                 }
-                if (found) {
+                if (foundMes && isAtChatEnd(foundMes)) {
                     var ta = document.getElementById('send_textarea');
                     if (ta && document.activeElement !== ta) {
                         try { ta.focus(); } catch (e) {}
@@ -462,7 +486,6 @@
             Object.assign(s, DEFAULTS);
             save();
             applyAll();
-            refreshUI();
             logStatus('已恢复默认设置');
             refreshUI();
         });
